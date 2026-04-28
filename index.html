@@ -26,6 +26,10 @@
 <body>
 <canvas id="gameCanvas" width="400" height="600"></canvas>
 <script>
+// Preload background image
+const bgPalacio = new Image();
+bgPalacio.src = 'palacio.png';
+
 // ============================================================
 // CONSTANTS
 // ============================================================
@@ -873,22 +877,21 @@ function renderHUD() {
 
 // ---- START screen ----
 function renderStart() {
-  // Cielo día
-  const [top, bot] = SKY_DAY;
-  const bands = 12;
-  for (let i = 0; i < bands; i++) {
-    const t = i/(bands-1);
-    ctx.fillStyle = lerpColor(top, bot, t);
-    ctx.fillRect(0, Math.floor(i*CANVAS_H/bands), CANVAS_W, Math.ceil(CANVAS_H/bands)+1);
+  // Fondo: imagen del Palacio de López (o cielo de fallback)
+  if (bgPalacio.complete && bgPalacio.naturalWidth > 0) {
+    ctx.drawImage(bgPalacio, 0, 0, CANVAS_W, CANVAS_H);
+  } else {
+    const [top, bot] = SKY_DAY;
+    const bands = 12;
+    for (let i = 0; i < bands; i++) {
+      const t = i/(bands-1);
+      ctx.fillStyle = lerpColor(top, bot, t);
+      ctx.fillRect(0, Math.floor(i*CANVAS_H/bands), CANVAS_W, Math.ceil(CANVAS_H/bands)+1);
+    }
+    ctx.fillStyle = '#3CB84A';
+    ctx.fillRect(60, 420, 80, 12);
+    ctx.fillRect(200,340, 70, 12);
   }
-
-  // Plataformas decorativas
-  ctx.fillStyle = '#3CB84A';
-  ctx.fillRect(60,  420, 80, 12);
-  ctx.fillRect(200, 340, 70, 12);
-  ctx.fillRect(100, 260, 65, 12);
-  ctx.fillStyle = '#3A9BFF';
-  ctx.fillRect(270, 300, 60, 12);
 
   // Overlay
   ctx.fillStyle = 'rgba(0,0,0,0.52)';
