@@ -28,6 +28,7 @@
 <script>
 // Preload background image
 const bgPalacio = new Image();
+bgPalacio.crossOrigin = 'anonymous';
 bgPalacio.src = 'palacio.png';
 
 // ============================================================
@@ -893,8 +894,13 @@ function renderStart() {
     ctx.fillRect(200,340, 70, 12);
   }
 
-  // Overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.52)';
+  // Overlay suave: solo oscurece la parte superior e inferior para legibilidad del texto
+  const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  grad.addColorStop(0,   'rgba(0,0,0,0.60)');
+  grad.addColorStop(0.35,'rgba(0,0,0,0.20)');
+  grad.addColorStop(0.65,'rgba(0,0,0,0.20)');
+  grad.addColorStop(1,   'rgba(0,0,0,0.70)');
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
   // Bandera paraguaya mini (franja roja-blanca-azul)
