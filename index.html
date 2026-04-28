@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Salto Guaraní</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0038A8;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: monospace;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 4px solid #D52B1E;
+    outline: 4px solid #FFFFFF;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+const CANVAS_W = 400;
+const CANVAS_H = 600;
+
+const GRAVITY        = 0.4;
+const JUMP_FORCE     = -13;
+const SPRING_FORCE   = -22;
+const JETPACK_FORCE  = -5.5;
+const JETPACK_DUR    = 180;
+const MAX_FALL       = 18;
+
+const PLAYER_W  = 16;
+const PLAYER_H  = 20;
+const PLAYER_SPD = 4;
+
+const PLATFORM_TIERS = [
+  { minScore:    0, wMin: 70, wMax: 80, gMin:  60, gMax:  85, fragile: 0.00, mobile: 0.05 },
+  { minScore:  500, wMin: 55, wMax: 75, gMin:  85, gMax: 120, fragile: 0.10, mobile: 0.10 },
+  { minScore: 1500, wMin: 45, wMax: 62, gMin: 120, gMax: 160, fragile: 0.20, mobile: 0.20 },
+  { minScore: 3000, wMin: 38, wMax: 52, gMin: 155, gMax: 200, fragile: 0.30, mobile: 0.25 },
+];
+const SPRING_CHANCE  = 0.10;
+const POWERUP_CHANCE = 0.07;
+const ENEMY_SCORE    = 1000;
+const PARTICLE_N     = 8;
+const PARTICLE_LIFE  = 32;
+
+const ALT_SUNSET =  3000;
+const ALT_NIGHT  =  7000;
+const ALT_SPACE  = 15000;
+const ALT_STARS  =  5500;
+
+const STATE_START    = 'start';
+const STATE_PLAYING  = 'playing';
+const STATE_GAMEOVER = 'gameover';
+
+// Sky color bands [topRGB, botRGB]
+const SKY_DAY    = [[135,206,235],[180,225,255]];
+const SKY_SUNSET = [[220,100, 30],[200, 60, 20]];
+const SKY_NIGHT  = [[ 10, 10, 42],[ 25, 20, 60]];
+const SKY_SPACE  = [[  0,  0,  0],[  4,  4, 14]];
+
+// ============================================================
+// CANVAS SETUP
+// ============================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let gameState = STATE_START;
+let score = 0;
+let highScore = 0;
+let maxWorldY = 450;
+
+// ============================================================
+// ENTITIES
+// ============================================================
+const player = {
+  x: 192, y: 450, vx: 0, vy: 0,
+  w: PLAYER_W, h: PLAYER_H,
+  scaleY: 1.0,
+  facingRight: true,
+  jetpackActive: false,
+  jetpackTimer: 0,
+  shielded: false,
+  dead: false,
+};
+
+const camera = { top: 0 };
+
+let platforms = [];
+let enemies   = [];
+let particles = [];
+let clouds    = [];
+let stars     = [];
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = { ArrowLeft: false, ArrowRight: false, Space: false };
+let pointerLeft = false, pointerRight = false;
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'ArrowLeft'  || e.code === 'ArrowRight' || e.code === 'Space') e.preventDefault();
+  if (e.code in keys) keys[e.code] = true;
+  if (e.code === 'Space') handleAction();
+});
+document.addEventListener('keyup', e => {
+  if (e.code in keys) keys[e.code] = false;
+});
+
+canvas.addEventListener('pointerdown', e => {
+  handleAction();
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.clientX - rect.left) / (rect.width / CANVAS_W);
+  if (gameState === STATE_PLAYING) {
+    if (cx < CANVAS_W / 2) pointerLeft = true;
+    else pointerRight = true;
+  }
+});
+canvas.addEventListener('pointerup', () => {
+  pointerLeft = false; pointerRight = false;
+});
+canvas.addEventListener('pointercancel', () => {
+  pointerLeft = false; pointerRight = false;
+});
+
+function handleAction() {
+  if (gameState === STATE_START || gameState === STATE_GAMEOVER) startGame();
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+function randInt(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+
+function lerpColor(a, b, t) {
+  const r = Math.round(a[0] + (b[0]-a[0])*t);
+  const g = Math.round(a[1] + (b[1]-a[1])*t);
+  const bl = Math.round(a[2] + (b[2]-a[2])*t);
+  return `rgb(${r},${g},${bl})`;
+}
+
+function lerp(a, b, t) { return a + (b-a)*t; }
+
+function getTier() {
+  for (let i = PLATFORM_TIERS.length-1; i >= 0; i--)
+    if (score >= PLATFORM_TIERS[i].minScore) return PLATFORM_TIERS[i];
+  return PLATFORM_TIERS[0];
+}
+
+function pickType(tier) {
+  const r = Math.random();
+  if (r < tier.fragile) return 'fragile';
+  if (r < tier.fragile + tier.mobile) return 'mobile';
+  if (r < tier.fragile + tier.mobile + SPRING_CHANCE) return 'spring';
+  return 'normal';
+}
+
+function spawnParticles(x, y, n, color) {
+  for (let i = 0; i < n; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 1 + Math.random() * 3;
+    particles.push({
+      x, y, vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd - 1,
+      life: PARTICLE_LIFE, maxLife: PARTICLE_LIFE, color,
+    });
+  }
+}
+
+// ============================================================
+// PLATFORM GENERATION
+// ============================================================
+function generatePlatforms(fromY, toY) {
+  // fromY > toY (fromY lower in world, toY higher/more negative)
+  let curY = fromY;
+  while (curY > toY) {
+    const tier = getTier();
+    const gap  = randInt(tier.gMin, tier.gMax);
+    curY -= gap;
+    const w = randInt(tier.wMin, tier.wMax);
+    const x = randInt(10, CANVAS_W - w - 10);
+    const type = pickType(tier);
+
+    const p = { x, y: curY, w, h: 12, type, broken: false,
+                moveDir: 1, moveSpeed: 0, moveLeft: 0, moveRight: 0,
+                powerup: null };
+
+    if (type === 'mobile') {
+      p.moveDir   = Math.random() < 0.5 ? 1 : -1;
+      p.moveSpeed = 0.8 + Math.random() * 1.4;
+      p.moveLeft  = 10;
+      p.moveRight = CANVAS_W - w - 10;
+    }
+
+    if (Math.random() < POWERUP_CHANCE && type !== 'fragile') {
+      p.powerup = { type: Math.random() < 0.6 ? 'jetpack' : 'shield', collected: false };
+    }
+
+    platforms.push(p);
+  }
+}
+
+// ============================================================
+// CLOUDS & STARS INIT
+// ============================================================
+function initClouds() {
+  clouds.length = 0;
+  for (let i = 0; i < 7; i++) {
+    clouds.push({
+      x: randInt(0, CANVAS_W - 80),
+      y: camera.top + randInt(0, CANVAS_H),
+      w: randInt(45, 90),
+      h: randInt(18, 30),
+      alpha: 0.25 + Math.random() * 0.35,
+      speed: 0.08 + Math.random() * 0.15,
+    });
+  }
+}
+
+function initStars() {
+  stars.length = 0;
+  for (let i = 0; i < 45; i++) {
+    stars.push({
+      x: randInt(0, CANVAS_W-2),
+      oy: randInt(0, CANVAS_H-2),  // offset within a repeating tile
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+// ============================================================
+// INIT GAME
+// ============================================================
+function initGame() {
+  Object.assign(player, {
+    x: 192, y: 450, vx: 0, vy: JUMP_FORCE,
+    w: PLAYER_W, h: PLAYER_H, scaleY: 1.0,
+    facingRight: true, jetpackActive: false,
+    jetpackTimer: 0, shielded: false, dead: false,
+  });
+  camera.top = 0;
+  score = 0;
+  maxWorldY = 450;
+  platforms.length = 0;
+  enemies.length = 0;
+  particles.length = 0;
+
+  // Guaranteed starting platform
+  platforms.push({ x: 168, y: 466, w: 80, h: 12, type: 'normal',
+                   broken: false, moveDir: 1, moveSpeed: 0,
+                   moveLeft: 0, moveRight: 0, powerup: null });
+
+  generatePlatforms(466, -300);
+  initClouds();
+  initStars();
+}
+
+function startGame() {
+  initGame();
+  gameState = STATE_PLAYING;
+}
+
+function endGame() {
+  if (score > highScore) highScore = score;
+  gameState = STATE_GAMEOVER;
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+let prevCamTop = 0;
+
+function update(dt) {
+  if (gameState !== STATE_PLAYING) return;
+  updatePlaying(dt);
+}
+
+function updatePlaying(dt) {
+  // 1. Horizontal movement
+  const goLeft  = keys.ArrowLeft  || pointerLeft;
+  const goRight = keys.ArrowRight || pointerRight;
+  if (goLeft)  { player.vx = -PLAYER_SPD; player.facingRight = false; }
+  else if (goRight) { player.vx = PLAYER_SPD; player.facingRight = true; }
+  else player.vx = 0;
+
+  // 2. Jetpack
+  if (player.jetpackActive) {
+    player.jetpackTimer -= dt;
+    if (player.jetpackTimer <= 0) {
+      player.jetpackActive = false;
+      player.jetpackTimer = 0;
+    } else {
+      player.vy = Math.max(player.vy + JETPACK_FORCE * dt, -14);
+    }
+  } else {
+    // 3. Gravity
+    player.vy = Math.min(player.vy + GRAVITY * dt, MAX_FALL);
+  }
+
+  // 4. Integrate
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+
+  // 5. Screen wrap
+  if (player.x > CANVAS_W)         player.x = -PLAYER_W;
+  if (player.x + PLAYER_W < 0)     player.x = CANVAS_W;
+
+  // 6. Camera (only up)
+  prevCamTop = camera.top;
+  camera.top = Math.min(camera.top, player.y - CANVAS_H * 0.4);
+
+  // 7. Score
+  if (player.y < maxWorldY) {
+    maxWorldY = player.y;
+    score = Math.floor(-maxWorldY / 10);
+  }
+
+  // 8. Mobile platforms
+  for (const p of platforms) {
+    if (p.type === 'mobile' && !p.broken) {
+      p.x += p.moveDir * p.moveSpeed * dt;
+      if (p.x <= p.moveLeft)  { p.x = p.moveLeft;  p.moveDir =  1; }
+      if (p.x >= p.moveRight) { p.x = p.moveRight; p.moveDir = -1; }
+    }
+  }
+
+  // 9. Enemies movement
+  for (const e of enemies) {
+    e.x += e.dir * e.speed * dt;
+    if (e.x <= e.bLeft)  { e.x = e.bLeft;  e.dir =  1; }
+    if (e.x >= e.bRight) { e.x = e.bRight; e.dir = -1; }
+  }
+
+  // 10. Platform collision
+  checkPlatformCollisions();
+
+  // 11. Power-up collision
+  checkPowerupCollisions();
+
+  // 12. Enemy collision
+  checkEnemyCollisions();
+
+  // 13. Particles
+  for (const p of particles) {
+    p.x  += p.vx * dt;
+    p.y  += p.vy * dt;
+    p.vy += 0.15 * dt;
+    p.life -= dt;
+  }
+  for (let i = particles.length-1; i >= 0; i--)
+    if (particles[i].life <= 0) particles.splice(i, 1);
+
+  // 14. Clouds parallax
+  const camDelta = camera.top - prevCamTop;
+  for (const c of clouds) {
+    c.y += camDelta * 0.3;
+    if (c.y - camera.top < -80)
+      c.y = camera.top + CANVAS_H + 20;
+  }
+
+  // 15. Squash/stretch
+  let targetScale = 1.0;
+  if (player.vy < -2) targetScale = 1.0 + Math.min(-player.vy / 25, 0.35);
+  else if (player.vy > 2) targetScale = 1.0 - Math.min(player.vy / 40, 0.22);
+  player.scaleY += (targetScale - player.scaleY) * 0.2;
+
+  // 16. Spawn enemies
+  if (score >= ENEMY_SCORE) {
+    // Remove enemies far below camera
+    for (let i = enemies.length-1; i >= 0; i--)
+      if (enemies[i].y > camera.top + CANVAS_H + 300) enemies.splice(i, 1);
+    // Spawn up to 4 at a time
+    if (enemies.length < 4 && Math.random() < 0.005) {
+      const ey = camera.top - randInt(100, 500);
+      enemies.push({
+        x: randInt(20, CANVAS_W-44), y: ey,
+        w: 24, h: 16, dir: Math.random()<0.5?1:-1,
+        speed: 1.2 + Math.random()*1.2,
+        bLeft: 10, bRight: CANVAS_W-34,
+      });
+    }
+  }
+
+  // 17. Death check
+  if (player.y > camera.top + CANVAS_H + 120) endGame();
+
+  // 18. Cull & generate platforms
+  const cullY = camera.top + CANVAS_H + 250;
+  for (let i = platforms.length-1; i >= 0; i--) {
+    if (platforms[i].broken || platforms[i].y > cullY) platforms.splice(i, 1);
+  }
+  const genTop = camera.top - 350;
+  let highestY = Infinity;
+  for (const p of platforms) if (p.y < highestY) highestY = p.y;
+  if (highestY > genTop) generatePlatforms(highestY, genTop);
+}
+
+// ============================================================
+// COLLISIONS
+// ============================================================
+function checkPlatformCollisions() {
+  if (player.vy <= 0) return;
+
+  const curBottom  = player.y + player.h;
+  const prevBottom = curBottom - player.vy;
+
+  for (const p of platforms) {
+    if (p.broken) continue;
+    const hOverlap = player.x + player.w > p.x && player.x < p.x + p.w;
+    const vCross   = prevBottom <= p.y + 2 && curBottom >= p.y;
+    if (!hOverlap || !vCross) continue;
+
+    player.y  = p.y - player.h;
+
+    if (p.type === 'spring') {
+      player.vy = SPRING_FORCE;
+      // Visual squash burst
+      player.scaleY = 0.55;
+    } else {
+      player.vy = JUMP_FORCE;
+      player.scaleY = 0.75;
+    }
+
+    if (p.type === 'fragile') {
+      p.broken = true;
+      spawnParticles(p.x + p.w/2, p.y + p.h/2, PARTICLE_N, '#8B6347');
+    }
+    break;
+  }
+}
+
+function checkEnemyCollisions() {
+  for (const e of enemies) {
+    const overlap =
+      player.x + player.w > e.x && player.x < e.x + e.w &&
+      player.y + player.h > e.y && player.y < e.y + e.h;
+    if (!overlap) continue;
+    if (player.shielded) {
+      player.shielded = false;
+      // Push enemy back
+      e.dir *= -1;
+    } else {
+      endGame();
+    }
+  }
+}
+
+function checkPowerupCollisions() {
+  for (const p of platforms) {
+    if (!p.powerup || p.powerup.collected) continue;
+    const pu = p.powerup;
+    const puX = p.x + p.w/2 - 6;
+    const puY = p.y - 16;
+    const overlap =
+      player.x + player.w > puX && player.x < puX + 12 &&
+      player.y + player.h > puY && player.y < puY + 12;
+    if (!overlap) continue;
+    pu.collected = true;
+    if (pu.type === 'jetpack') {
+      player.jetpackActive = true;
+      player.jetpackTimer  = JETPACK_DUR;
+    } else if (pu.type === 'shield') {
+      player.shielded = true;
+    }
+  }
+}
+
+// ============================================================
+// SKY COLOR
+// ============================================================
+function getSkyColors(alt) {
+  if (alt <= 0) return SKY_DAY;
+  if (alt <= ALT_SUNSET) {
+    const t = alt / ALT_SUNSET;
+    return [
+      SKY_DAY[0].map((v,i) => lerp(v, SKY_SUNSET[0][i], t)),
+      SKY_DAY[1].map((v,i) => lerp(v, SKY_SUNSET[1][i], t)),
+    ];
+  }
+  if (alt <= ALT_NIGHT) {
+    const t = (alt - ALT_SUNSET) / (ALT_NIGHT - ALT_SUNSET);
+    return [
+      SKY_SUNSET[0].map((v,i) => lerp(v, SKY_NIGHT[0][i], t)),
+      SKY_SUNSET[1].map((v,i) => lerp(v, SKY_NIGHT[1][i], t)),
+    ];
+  }
+  if (alt <= ALT_SPACE) {
+    const t = (alt - ALT_NIGHT) / (ALT_SPACE - ALT_NIGHT);
+    return [
+      SKY_NIGHT[0].map((v,i) => lerp(v, SKY_SPACE[0][i], t)),
+      SKY_NIGHT[1].map((v,i) => lerp(v, SKY_SPACE[1][i], t)),
+    ];
+  }
+  return SKY_SPACE;
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function render() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+  if (gameState === STATE_START)    renderStart();
+  if (gameState === STATE_PLAYING)  renderGame();
+  if (gameState === STATE_GAMEOVER) renderGameOver();
+}
+
+function renderGame() {
+  renderBackground();
+  renderClouds();
+  renderPlatforms();
+  renderParticles();
+  renderEnemies();
+  renderPlayer();
+  renderHUD();
+}
+
+// ---- Background ----
+function renderBackground() {
+  const alt = -camera.top;
+  const [top, bot] = getSkyColors(alt);
+
+  const bands = 12;
+  for (let i = 0; i < bands; i++) {
+    const t = i / (bands-1);
+    ctx.fillStyle = lerpColor(top, bot, t);
+    const y = Math.floor(i * CANVAS_H / bands);
+    const h = Math.ceil(CANVAS_H / bands) + 1;
+    ctx.fillRect(0, y, CANVAS_W, h);
+  }
+
+  // Stars
+  if (alt > ALT_STARS) {
+    const starAlpha = Math.min((alt - ALT_STARS) / 2000, 1);
+    for (const s of stars) {
+      const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(Date.now()/350 + s.phase));
+      // Tile stars across camera scroll
+      const sy = ((s.oy - camera.top % CANVAS_H) + CANVAS_H) % CANVAS_H;
+      ctx.fillStyle = `rgba(255,255,255,${(starAlpha * twinkle).toFixed(2)})`;
+      const size = Math.random() < 0.1 ? 2 : 1;
+      ctx.fillRect(s.x, Math.floor(sy), size, size);
+    }
+  }
+}
+
+// ---- Clouds ----
+function renderClouds() {
+  ctx.save();
+  for (const c of clouds) {
+    const sy = c.y - camera.top;
+    if (sy > CANVAS_H + 50 || sy < -50) continue;
+    ctx.globalAlpha = c.alpha;
+    ctx.fillStyle = '#FFFFFF';
+    // Cloud shape: 3 overlapping ovals via fillRect
+    const cx = c.x, cy = Math.floor(sy), w = c.w, h = c.h;
+    ctx.fillRect(cx,         cy + h*0.3, w,       h*0.7);
+    ctx.fillRect(cx + w*0.1, cy,         w*0.55,  h*0.6);
+    ctx.fillRect(cx + w*0.45,cy + h*0.1, w*0.45,  h*0.55);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ---- Platforms ----
+function renderPlatforms() {
+  const COLORS = { normal:'#3CB84A', mobile:'#3A9BFF', fragile:'#9B6B45', spring:'#FFD020' };
+  const DARK   = { normal:'#1E7A2A', mobile:'#1A6FCC', fragile:'#6B3E1E', spring:'#CC9900' };
+
+  for (const p of platforms) {
+    const sy = p.y - camera.top;
+    if (sy > CANVAS_H + 20 || sy < -20) continue;
+    const sx = Math.floor(p.x);
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(sx+2, sy+3, p.w, p.h);
+
+    // Main body
+    ctx.fillStyle = COLORS[p.type];
+    ctx.fillRect(sx, sy, p.w, p.h);
+
+    // Darker bottom edge
+    ctx.fillStyle = DARK[p.type];
+    ctx.fillRect(sx, sy + p.h - 3, p.w, 3);
+
+    // White highlight top
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(sx, sy, p.w, 2);
+
+    // Chipá (panito de queso paraguayo) sobre plataforma resorte
+    if (p.type === 'spring') {
+      const mx = sx + Math.floor(p.w/2);
+      // Cuerpo chipá (dorado/amarillo)
+      ctx.fillStyle = '#E8A020';
+      ctx.fillRect(mx-5, sy-8, 10, 8);
+      ctx.fillRect(mx-4, sy-9, 8,  1);
+      ctx.fillRect(mx-3, sy-10,6,  1);
+      // Dorado oscuro (corteza)
+      ctx.fillStyle = '#B06010';
+      ctx.fillRect(mx-5, sy-3, 10, 3);
+      // Queso derretido (blanco)
+      ctx.fillStyle = '#FFFBE8';
+      ctx.fillRect(mx-3, sy-8, 6, 2);
+      ctx.fillRect(mx-4, sy-7, 2, 1);
+      ctx.fillRect(mx+2, sy-7, 2, 1);
+    }
+
+    // Power-up icon
+    if (p.powerup && !p.powerup.collected) {
+      const px = sx + Math.floor(p.w/2) - 6;
+      const py = sy - 18;
+      if (p.powerup.type === 'jetpack') renderJetpackIcon(px, py);
+      else renderShieldIcon(px, py);
+    }
+  }
+}
+
+function renderJetpackIcon(x, y) {
+  // Guampa de tereré (cuerno)
+  ctx.fillStyle = '#3A1800';
+  ctx.fillRect(x+1, y+3,  9, 9);   // cuerpo guampa
+  ctx.fillRect(x+3, y+1,  6, 3);   // boca ancha
+  ctx.fillRect(x+3, y+11, 4, 2);   // base angosta
+  // Yerba adentro
+  ctx.fillStyle = '#2D6E1A';
+  ctx.fillRect(x+3, y+2,  6, 3);
+  // Bombilla (metalica)
+  ctx.fillStyle = '#AAAAAA';
+  ctx.fillRect(x+6, y-2,  2, 14);
+  ctx.fillRect(x+5, y+10, 4, 1);
+  // Vapor
+  ctx.fillStyle = '#88DD88';
+  ctx.fillRect(x+5, y-4,  1, 2);
+  ctx.fillRect(x+7, y-5,  1, 2);
+  ctx.fillRect(x+9, y-3,  1, 2);
+}
+
+function renderShieldIcon(x, y) {
+  // Ñandutí (encaje araña) - centro + rayos
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(x+5, y+5, 2, 2);    // centro
+  // Rayos cardinales
+  ctx.fillRect(x+5, y,   2, 5);    // arriba
+  ctx.fillRect(x+5, y+7, 2, 5);    // abajo
+  ctx.fillRect(x,   y+5, 5, 2);    // izq
+  ctx.fillRect(x+7, y+5, 5, 2);    // der
+  // Rayos diagonales
+  ctx.fillRect(x+2, y+2, 2, 2);
+  ctx.fillRect(x+8, y+2, 2, 2);
+  ctx.fillRect(x+2, y+8, 2, 2);
+  ctx.fillRect(x+8, y+8, 2, 2);
+  // Anillo exterior (puntos)
+  ctx.fillStyle = '#FFDD44';
+  ctx.fillRect(x+5, y+1, 2, 1);
+  ctx.fillRect(x+5, y+10,2, 1);
+  ctx.fillRect(x+1, y+5, 1, 2);
+  ctx.fillRect(x+10,y+5, 1, 2);
+}
+
+// ---- Enemies (mberu = mosquito) ----
+function renderEnemies() {
+  for (const e of enemies) {
+    const sx = Math.floor(e.x);
+    const sy = Math.floor(e.y - camera.top);
+    if (sy > CANVAS_H + 20 || sy < -20) continue;
+
+    const buzz = Math.sin(Date.now()/80);
+    const wingY = buzz > 0 ? -2 : 1;
+
+    // Alas semitransparentes
+    ctx.fillStyle = 'rgba(180,220,255,0.55)';
+    ctx.fillRect(sx,      sy+3+wingY, 8, 5);
+    ctx.fillRect(sx+16,   sy+3+wingY, 8, 5);
+    ctx.fillRect(sx+1,    sy+7+wingY, 7, 3);
+    ctx.fillRect(sx+16,   sy+7+wingY, 7, 3);
+
+    // Cuerpo segmentado (marrón oscuro)
+    ctx.fillStyle = '#3A2200';
+    ctx.fillRect(sx+9, sy+4,  6, 4);
+    ctx.fillStyle = '#2A1600';
+    ctx.fillRect(sx+9, sy+7,  5, 3);
+    ctx.fillStyle = '#3A2200';
+    ctx.fillRect(sx+10,sy+9,  4, 3);
+    // Cabeza
+    ctx.fillStyle = '#1A1A1A';
+    ctx.fillRect(sx+10,sy+1,  4, 4);
+    // Ojos rojos
+    ctx.fillStyle = '#FF1111';
+    ctx.fillRect(sx+10,sy+2,  2, 2);
+    ctx.fillRect(sx+13,sy+2,  1, 1);
+    // Trompa (probóscide)
+    ctx.fillStyle = '#555555';
+    ctx.fillRect(sx+11,sy+5,  1, 7);
+    ctx.fillRect(sx+12,sy+11, 1, 2);
+    // Patas (3 a cada lado)
+    ctx.fillStyle = '#2A1600';
+    ctx.fillRect(sx+7,  sy+5,  3, 1);
+    ctx.fillRect(sx+7,  sy+7,  3, 1);
+    ctx.fillRect(sx+6,  sy+9,  4, 1);
+    ctx.fillRect(sx+15, sy+5,  3, 1);
+    ctx.fillRect(sx+15, sy+7,  3, 1);
+    ctx.fillRect(sx+15, sy+9,  4, 1);
+  }
+}
+
+// ---- Player (camiseta albirroja) ----
+function renderPlayer() {
+  const sx = Math.floor(player.x);
+  const sy = Math.floor(player.y - camera.top);
+
+  ctx.save();
+  const cx = sx + PLAYER_W/2;
+  const cy = sy + PLAYER_H/2;
+  ctx.translate(cx, cy);
+  ctx.scale(player.facingRight ? 1 : -1, player.scaleY);
+  ctx.translate(-cx, -cy);
+
+  // Guampa de tereré en la espalda (power-up activo)
+  if (player.jetpackActive) {
+    ctx.fillStyle = '#3A1800';
+    ctx.fillRect(sx-5, sy+5, 5, 9);
+    ctx.fillRect(sx-4, sy+4, 4, 1);
+    // Vapor verde
+    ctx.fillStyle = '#44BB44';
+    const fh = 2 + Math.floor(Math.random()*3);
+    ctx.fillRect(sx-4, sy+4-fh, 2, fh);
+    ctx.fillRect(sx-2, sy+3-fh, 2, fh-1);
+  }
+
+  // Ñandutí glow (escudo)
+  if (player.shielded) {
+    ctx.fillStyle = 'rgba(255,220,50,0.18)';
+    ctx.fillRect(sx-4, sy-4, PLAYER_W+8, PLAYER_H+8);
+    ctx.fillStyle = 'rgba(255,220,50,0.30)';
+    ctx.fillRect(sx-2, sy-2, PLAYER_W+4, PLAYER_H+4);
+  }
+
+  // Shorts azules (bandera PY)
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(sx+1,  sy+13, 6, 5);
+  ctx.fillRect(sx+9,  sy+13, 6, 5);
+  // Medias blancas
+  ctx.fillStyle = '#EEEEEE';
+  ctx.fillRect(sx+1,  sy+17, 5, 3);
+  ctx.fillRect(sx+10, sy+17, 5, 3);
+  // Botines negros
+  ctx.fillStyle = '#111111';
+  ctx.fillRect(sx,    sy+19, 6, 1);
+  ctx.fillRect(sx+10, sy+19, 6, 1);
+
+  // Camiseta albirroja (franjas verticales roja y blanca)
+  // Franja izquierda roja
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(sx+2, sy+8, 6, 6);
+  // Franja derecha blanca
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(sx+8, sy+8, 6, 6);
+  // Borde inferior camiseta
+  ctx.fillStyle = '#AA2010';
+  ctx.fillRect(sx+2, sy+13, 12, 1);
+  // Brazos: izquierdo rojo, derecho blanco
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(sx-2, sy+9, 4, 5);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(sx+14,sy+9, 4, 5);
+  // Manos
+  ctx.fillStyle = '#C68B6B';
+  ctx.fillRect(sx-2, sy+13, 3, 3);
+  ctx.fillRect(sx+15,sy+13, 3, 3);
+
+  // Cabeza (piel morena)
+  ctx.fillStyle = '#C68B6B';
+  ctx.fillRect(sx+3, sy,   10, 9);
+  // Pelo negro
+  ctx.fillStyle = '#1A1A1A';
+  ctx.fillRect(sx+3, sy,   10, 3);
+  ctx.fillRect(sx+2, sy+1,  2, 3);
+  ctx.fillRect(sx+13,sy+1,  1, 2);
+  // Ojos
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(sx+4, sy+3, 3, 3);
+  ctx.fillRect(sx+9, sy+3, 3, 3);
+  ctx.fillStyle = '#3A2000';
+  ctx.fillRect(sx+5, sy+4, 2, 2);
+  ctx.fillRect(sx+10,sy+4, 2, 2);
+  ctx.fillStyle = '#111111';
+  ctx.fillRect(sx+6, sy+5, 1, 1);
+  ctx.fillRect(sx+11,sy+5, 1, 1);
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillRect(sx+5, sy+4, 1, 1);
+  ctx.fillRect(sx+10,sy+4, 1, 1);
+  // Boca sonriente
+  ctx.fillStyle = '#883322';
+  ctx.fillRect(sx+5, sy+7, 4, 1);
+  ctx.fillRect(sx+5, sy+6, 1, 1);
+  ctx.fillRect(sx+8, sy+6, 1, 1);
+
+  ctx.restore();
+}
+
+// ---- Particles ----
+function renderParticles() {
+  for (const p of particles) {
+    const a = Math.max(0, p.life / p.maxLife);
+    const sy = Math.floor(p.y - camera.top);
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = a;
+    ctx.fillRect(Math.floor(p.x), sy, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- HUD ----
+function renderHUD() {
+  ctx.font = 'bold 14px monospace';
+  ctx.textBaseline = 'top';
+
+  // Score shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Pts: ${score}`, 9, 9);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Récord: ${highScore}`, CANVAS_W - 7, 9);
+
+  // Score
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Pts: ${score}`, 8, 8);
+  ctx.textAlign = 'right';
+  ctx.fillText(`Récord: ${highScore}`, CANVAS_W - 8, 8);
+
+  // Jetpack bar
+  if (player.jetpackActive) {
+    const pct = player.jetpackTimer / JETPACK_DUR;
+    const bx = CANVAS_W/2 - 44, by = 8, bw = 88, bh = 9;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = pct > 0.4 ? '#FF6600' : '#FF2200';
+    ctx.fillRect(bx, by, Math.floor(bw * pct), bh);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(bx, by, bw, 1);
+    ctx.fillRect(bx, by+bh-1, bw, 1);
+    ctx.fillRect(bx, by, 1, bh);
+    ctx.fillRect(bx+bw-1, by, 1, bh);
+    ctx.textAlign = 'center';
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText('TERERÉ', CANVAS_W/2, by+1);
+  }
+
+  // Ñandutí indicator
+  if (player.shielded) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = '#FFDD44';
+    ctx.fillText('[ ÑANDUTÍ ]', CANVAS_W/2, 24);
+  }
+}
+
+// ---- START screen ----
+function renderStart() {
+  // Cielo día
+  const [top, bot] = SKY_DAY;
+  const bands = 12;
+  for (let i = 0; i < bands; i++) {
+    const t = i/(bands-1);
+    ctx.fillStyle = lerpColor(top, bot, t);
+    ctx.fillRect(0, Math.floor(i*CANVAS_H/bands), CANVAS_W, Math.ceil(CANVAS_H/bands)+1);
+  }
+
+  // Plataformas decorativas
+  ctx.fillStyle = '#3CB84A';
+  ctx.fillRect(60,  420, 80, 12);
+  ctx.fillRect(200, 340, 70, 12);
+  ctx.fillRect(100, 260, 65, 12);
+  ctx.fillStyle = '#3A9BFF';
+  ctx.fillRect(270, 300, 60, 12);
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.52)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // Bandera paraguaya mini (franja roja-blanca-azul)
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(CANVAS_W/2-36, 60, 72, 14);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(CANVAS_W/2-36, 74, 72, 14);
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(CANVAS_W/2-36, 88, 72, 14);
+  // Estrella en la franja blanca
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(CANVAS_W/2-1, 77, 3, 8);
+  ctx.fillRect(CANVAS_W/2-4, 80, 9, 2);
+
+  // Title box
+  ctx.fillStyle = 'rgba(213,43,30,0.25)';
+  ctx.fillRect(40, 112, 320, 72);
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(40, 112, 320, 2);
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(40, 182, 320, 2);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Título
+  ctx.font = 'bold 36px monospace';
+  ctx.fillStyle = '#111';
+  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2+2, 150);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2, 148);
+
+  // Tagline en guaraní
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#FFDD88';
+  ctx.fillText('¡Jaike yvate! — ¡Subí hasta las nubes!', CANVAS_W/2, 198);
+
+  // Panel instrucciones
+  ctx.fillStyle = 'rgba(0,56,168,0.3)';
+  ctx.fillRect(40, 214, 320, 156);
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(40, 214, 320, 1);
+
+  ctx.font = 'bold 12px monospace';
+  ctx.fillStyle = '#FFDD44';
+  ctx.fillText('CONTROLES', CANVAS_W/2, 232);
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#CCCCCC';
+  ctx.fillText('← →  Mover | Salta solo al pisar', CANVAS_W/2, 252);
+
+  // Leyenda plataformas
+  const types = [
+    { color:'#3CB84A', label:'Normal' },
+    { color:'#3A9BFF', label:'Móvil'  },
+    { color:'#9B6B45', label:'Frágil' },
+    { color:'#FFD020', label:'Chipá'  },
+  ];
+  const lx = [48, 132, 216, 300];
+  for (let i = 0; i < types.length; i++) {
+    ctx.fillStyle = types[i].color;
+    ctx.fillRect(lx[i], 270, 30, 8);
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#CCCCCC';
+    ctx.textAlign = 'left';
+    ctx.fillText(types[i].label, lx[i], 284);
+  }
+  ctx.textAlign = 'center';
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#FFAAAA';
+  ctx.fillText('¡Esquivá mberu (mosquitos) desde 1000!', CANVAS_W/2, 308);
+  ctx.fillStyle = '#AAFFCC';
+  ctx.fillText('Juntá tereré  y ñandutí', CANVAS_W/2, 326);
+
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#AAAAAA';
+  ctx.fillText('Tereré = propulsión  |  Ñandutí = escudo', CANVAS_W/2, 346);
+  ctx.fillText('Chipá = super salto', CANVAS_W/2, 360);
+
+  // Blink prompt
+  if (Math.floor(Date.now()/500) % 2 === 0) {
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#FFFF55';
+    ctx.fillText('ESPACIO o TOQUE para empezar', CANVAS_W/2, 406);
+  }
+
+  // Mini jugador con camiseta albirroja
+  drawStaticPlayer(192, 438);
+}
+
+function drawStaticPlayer(x, y) {
+  // Cabeza morena
+  ctx.fillStyle = '#C68B6B';
+  ctx.fillRect(x+3, y,   10, 9);
+  ctx.fillStyle = '#1A1A1A';
+  ctx.fillRect(x+3, y,   10, 3);
+  // Ojos
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(x+4, y+3, 3, 3);
+  ctx.fillRect(x+9, y+3, 3, 3);
+  ctx.fillStyle = '#3A2000';
+  ctx.fillRect(x+5, y+4, 2, 2);
+  ctx.fillRect(x+10,y+4, 2, 2);
+  // Camiseta albirroja
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(x+2, y+8, 6, 6);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(x+8, y+8, 6, 6);
+  // Shorts azules
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(x+1, y+13, 6, 5);
+  ctx.fillRect(x+9, y+13, 6, 5);
+  // Medias blancas
+  ctx.fillStyle = '#EEEEEE';
+  ctx.fillRect(x+1, y+17, 5, 3);
+  ctx.fillRect(x+10,y+17, 5, 3);
+}
+
+// ---- GAME OVER screen ----
+function renderGameOver() {
+  // Background: sky at current altitude
+  renderBackground();
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // "¡OMANÓ!" (murió en guaraní) + GAME OVER
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#AA0000';
+  ctx.fillText('¡OMANÓ!', CANVAS_W/2+2, 178);
+  ctx.fillStyle = '#FF6666';
+  ctx.fillText('¡OMANÓ!', CANVAS_W/2, 176);
+
+  ctx.font = 'bold 32px monospace';
+  ctx.fillStyle = '#222';
+  ctx.fillText('GAME OVER', CANVAS_W/2+2, 214);
+  ctx.fillStyle = '#FF4444';
+  ctx.fillText('GAME OVER', CANVAS_W/2, 212);
+
+  // Score box con colores de bandera PY
+  ctx.fillStyle = 'rgba(213,43,30,0.15)';
+  ctx.fillRect(80, 238, 240, 92);
+  ctx.fillStyle = '#D52B1E';
+  ctx.fillRect(80, 238, 240, 2);
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(80, 328, 240, 2);
+
+  ctx.font = '14px monospace';
+  ctx.fillStyle = '#AAAAAA';
+  ctx.fillText('Puntuación', CANVAS_W/2, 260);
+  ctx.font = 'bold 30px monospace';
+  ctx.fillStyle = '#FFFF55';
+  ctx.fillText(score, CANVAS_W/2, 292);
+
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#AAAAAA';
+  ctx.fillText(`Récord: ${highScore}`, CANVAS_W/2, 318);
+
+  const isNew = score === highScore && score > 0;
+  if (isNew) {
+    ctx.font = 'bold 13px monospace';
+    ctx.fillStyle = '#44FF88';
+    ctx.fillText('¡REKÓRD PYAHU! 🏆', CANVAS_W/2, 344);
+  }
+
+  // Frase en guaraní según puntaje
+  ctx.font = '11px monospace';
+  ctx.fillStyle = '#AADDFF';
+  const phrase = score < 500  ? '"Che mba\'e porã" — ¡Bien hecho!'
+               : score < 1500 ? '"Porã vaerã" — ¡Muy bien!'
+               : score < 3000 ? '"Tereré ndaipóri" — ¡Al tereré!'
+                               : '"Che pytyvõ" — ¡Sos un crack!';
+  ctx.fillText(phrase, CANVAS_W/2, 364);
+
+  const alt = Math.floor(-maxWorldY / 10);
+  ctx.fillStyle = '#777777';
+  ctx.fillText(`Altura máxima: ${alt * 10}m`, CANVAS_W/2, 382);
+
+  // Blink prompt
+  if (Math.floor(Date.now()/500) % 2 === 0) {
+    ctx.font = 'bold 13px monospace';
+    ctx.fillStyle = '#FFFF55';
+    ctx.fillText('ESPACIO o TOQUE para reiniciar', CANVAS_W/2, 420);
+  }
+}
+
+// ============================================================
+// GAME LOOP
+// ============================================================
+let lastTime = 0;
+
+function loop(timestamp) {
+  const rawDt = timestamp - lastTime;
+  lastTime = timestamp;
+  const dt = Math.min(rawDt, 33) / 16.667;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
+</script>
+</body>
+</html>
