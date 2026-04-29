@@ -21,15 +21,68 @@
     border: 4px solid #D52B1E;
     outline: 4px solid #FFFFFF;
   }
+  #nameOverlay {
+    display: none;
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    z-index: 10;
+    background: rgba(0,0,0,0.80);
+    border: 2px solid #FFFF55;
+    padding: 24px 28px;
+    width: 260px;
+  }
+  #nameOverlay p {
+    color: #FFFF55;
+    font-size: 15px;
+    margin-bottom: 12px;
+    font-family: monospace;
+  }
+  #nameInput {
+    font-size: 18px;
+    font-family: monospace;
+    padding: 7px 10px;
+    border: 2px solid #FFFF55;
+    background: #111;
+    color: #FFF;
+    text-align: center;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  #nameConfirm {
+    margin-top: 12px;
+    font-size: 14px;
+    font-family: monospace;
+    padding: 7px 22px;
+    background: #D52B1E;
+    color: #FFF;
+    border: 2px solid #FF8866;
+    cursor: pointer;
+    width: 100%;
+  }
+  #nameConfirm:hover { background: #FF3333; }
+  #gameWrap { position: relative; display: inline-block; }
 </style>
 </head>
 <body>
-<canvas id="gameCanvas" width="400" height="600"></canvas>
+<div id="gameWrap">
+  <canvas id="gameCanvas" width="400" height="600"></canvas>
+  <div id="nameOverlay">
+    <p>¡Ingresá tu nombre!</p>
+    <input id="nameInput" type="text" maxlength="12" placeholder="Tu nombre..." autocomplete="off">
+    <button id="nameConfirm">¡GUARDAR PUNTAJE!</button>
+  </div>
+</div>
 <script>
-// Preload background image
-const bgPalacio = new Image();
-bgPalacio.crossOrigin = 'anonymous';
-bgPalacio.src = 'palacio.png';
+// Leaderboard (top 10, guardado en localStorage)
+let leaderboard = JSON.parse(localStorage.getItem('saltoGuaraniLB') || '[]');
+function saveScore(name, sc) {
+  leaderboard.push({ name: name.trim() || 'Anónimo', score: sc });
+  leaderboard.sort((a, b) => b.score - a.score);
+  leaderboard = leaderboard.slice(0, 10);
+  localStorage.setItem('saltoGuaraniLB', JSON.stringify(leaderboard));
+}
 
 // ============================================================
 // CONSTANTS
@@ -65,9 +118,10 @@ const ALT_NIGHT  =  7000;
 const ALT_SPACE  = 15000;
 const ALT_STARS  =  5500;
 
-const STATE_START    = 'start';
-const STATE_PLAYING  = 'playing';
-const STATE_GAMEOVER = 'gameover';
+const STATE_START      = 'start';
+const STATE_PLAYING    = 'playing';
+const STATE_ENTER_NAME = 'entername';
+const STATE_GAMEOVER   = 'gameover';
 
 // Sky color bands [topRGB, botRGB]
 const SKY_DAY    = [[135,206,235],[180,225,255]];
@@ -145,6 +199,7 @@ canvas.addEventListener('pointercancel', () => {
 
 function handleAction() {
   if (gameState === STATE_START || gameState === STATE_GAMEOVER) startGame();
+  // STATE_ENTER_NAME se maneja por el botón HTML
 }
 
 // ============================================================
@@ -281,6 +336,18 @@ function startGame() {
 
 function endGame() {
   if (score > highScore) highScore = score;
+  gameState = STATE_ENTER_NAME;
+  const overlay = document.getElementById('nameOverlay');
+  const input   = document.getElementById('nameInput');
+  overlay.style.display = 'block';
+  input.value = '';
+  setTimeout(() => input.focus(), 50);
+}
+
+function confirmName() {
+  const name = document.getElementById('nameInput').value;
+  saveScore(name, score);
+  document.getElementById('nameOverlay').style.display = 'none';
   gameState = STATE_GAMEOVER;
 }
 
@@ -518,9 +585,10 @@ function getSkyColors(alt) {
 // ============================================================
 function render() {
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-  if (gameState === STATE_START)    renderStart();
-  if (gameState === STATE_PLAYING)  renderGame();
-  if (gameState === STATE_GAMEOVER) renderGameOver();
+  if (gameState === STATE_START)      renderStart();
+  if (gameState === STATE_PLAYING)    renderGame();
+  if (gameState === STATE_ENTER_NAME) renderEnterName();
+  if (gameState === STATE_GAMEOVER)   renderGameOver();
 }
 
 function renderGame() {
@@ -876,23 +944,197 @@ function renderHUD() {
   }
 }
 
+// ---- Palacio de López pixel art ----
+function drawCloud(x, y, w, h) {
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.fillRect(x,           y + h*0.35, w,      h*0.65);
+  ctx.fillRect(x + w*0.10,  y,          w*0.55, h*0.65);
+  ctx.fillRect(x + w*0.45,  y + h*0.12, w*0.44, h*0.58);
+}
+
+function drawPalacio() {
+  const W = CANVAS_W, H = CANVAS_H;
+
+  // -- CIELO: izquierda cálida, derecha azul --
+  for (let i = 0; i < 20; i++) {
+    const t = i / 19;
+    ctx.fillStyle = lerpColor([245,165,48],[145,210,240], t);
+    ctx.fillRect(Math.floor(i*(W/20)), 0, Math.ceil(W/20)+1, 310);
+  }
+  // Banda naranja baja (izquierda)
+  for (let i = 0; i < 10; i++) {
+    const t = i / 9;
+    ctx.fillStyle = lerpColor([240,130,30],[245,165,48], t);
+    ctx.fillRect(Math.floor(i*(W/2/10)), 200, Math.ceil(W/2/10)+1, 110);
+  }
+
+  // Nubes
+  drawCloud(18,  70, 72, 22);
+  drawCloud(155, 52, 42, 16);
+  drawCloud(248, 45, 88, 24);
+  drawCloud(320,100, 58, 18);
+
+  // -- SUELO / PLAZA AJEDREZADA --
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 20; col++) {
+      ctx.fillStyle = (row+col)%2===0 ? '#9A7850' : '#C4A070';
+      ctx.fillRect(col*20, 505+row*12, 20, 12);
+    }
+  }
+  // Franja verde
+  ctx.fillStyle = '#2E7A18';
+  ctx.fillRect(0, 490, W, 16);
+  ctx.fillStyle = '#1E5A0A';
+  ctx.fillRect(0, 502, W, 5);
+
+  const TC  = '#C87848';  // terracota principal
+  const TCL = '#D89060';  // terracota claro
+  const TCD = '#A05030';  // terracota oscuro
+  const AD  = '#6A2E10';  // arco sombra
+
+  // -- ALA IZQUIERDA --
+  ctx.fillStyle = TC;
+  ctx.fillRect(4, 255, 116, 240);
+  ctx.fillStyle = TCL;
+  ctx.fillRect(4, 255, 116, 7);
+  ctx.fillRect(4, 338, 116, 5);
+  ctx.fillRect(4, 420, 116, 5);
+  ctx.fillStyle = TCD;
+  ctx.fillRect(4, 490, 116, 5);
+  // Ventanas ala izquierda
+  ctx.fillStyle = '#2A5A1A';
+  for (let i=0; i<3; i++) {
+    ctx.fillRect(12+i*36, 268, 18, 24);
+    ctx.fillRect(12+i*36, 348, 18, 24);
+  }
+  // Arcos ala izquierda (4)
+  for (let i=0; i<4; i++) {
+    ctx.fillStyle = AD;
+    ctx.fillRect(8+i*27, 430, 18, 65);
+    ctx.fillRect(6+i*27, 430, 22, 8);
+    ctx.fillRect(7+i*27, 423, 20, 9);
+    ctx.fillRect(9+i*27, 418, 16, 7);
+  }
+
+  // -- ALA DERECHA --
+  ctx.fillStyle = TC;
+  ctx.fillRect(280, 255, 116, 240);
+  ctx.fillStyle = TCL;
+  ctx.fillRect(280, 255, 116, 7);
+  ctx.fillRect(280, 338, 116, 5);
+  ctx.fillRect(280, 420, 116, 5);
+  ctx.fillStyle = TCD;
+  ctx.fillRect(280, 490, 116, 5);
+  ctx.fillStyle = '#2A5A1A';
+  for (let i=0; i<3; i++) {
+    ctx.fillRect(288+i*36, 268, 18, 24);
+    ctx.fillRect(288+i*36, 348, 18, 24);
+  }
+  for (let i=0; i<4; i++) {
+    ctx.fillStyle = AD;
+    ctx.fillRect(284+i*27, 430, 18, 65);
+    ctx.fillRect(282+i*27, 430, 22, 8);
+    ctx.fillRect(283+i*27, 423, 20, 9);
+    ctx.fillRect(285+i*27, 418, 16, 7);
+  }
+
+  // -- CUERPO CENTRAL --
+  ctx.fillStyle = TC;
+  ctx.fillRect(110, 215, 180, 280);
+  ctx.fillStyle = TCL;
+  ctx.fillRect(105, 215, 190, 7);
+  ctx.fillRect(105, 298, 190, 5);
+  ctx.fillRect(105, 378, 190, 5);
+  ctx.fillStyle = TCD;
+  ctx.fillRect(105, 490, 190, 5);
+  // Pilastras laterales
+  ctx.fillStyle = TCL;
+  ctx.fillRect(105, 215, 8, 280);
+  ctx.fillRect(287, 215, 8, 280);
+  // Ventanas centrales
+  ctx.fillStyle = '#2A5A1A';
+  for (let row=0; row<2; row++) {
+    for (let col=0; col<4; col++) {
+      ctx.fillRect(118+col*42, 226+row*82, 22, 30);
+    }
+  }
+  // Arcos centrales (entrada, 2 grandes)
+  for (let i=0; i<2; i++) {
+    ctx.fillStyle = AD;
+    ctx.fillRect(128+i*64, 400, 44, 95);
+    ctx.fillRect(124+i*64, 400, 52, 10);
+    ctx.fillRect(126+i*64, 390, 48, 12);
+    ctx.fillRect(129+i*64, 382, 42, 10);
+  }
+
+  // -- TORRE CENTRAL --
+  ctx.fillStyle = TC;
+  ctx.fillRect(153, 120, 94, 105);
+  ctx.fillStyle = TCL;
+  ctx.fillRect(148, 120, 104, 6);
+  ctx.fillRect(148, 168, 104, 4);
+  // Pilastras torre
+  ctx.fillStyle = TCL;
+  ctx.fillRect(148, 120, 8, 105);
+  ctx.fillRect(244, 120, 8, 105);
+  // Ventanas torre
+  ctx.fillStyle = '#2A5A1A';
+  ctx.fillRect(163, 128, 20, 28);
+  ctx.fillRect(194, 128, 20, 28);
+  ctx.fillRect(225, 128, 20, 28);
+  ctx.fillRect(168, 172, 16, 24);
+  ctx.fillRect(218, 172, 16, 24);
+
+  // -- REMATE / CUPULA --
+  ctx.fillStyle = TCD;
+  ctx.fillRect(163, 100, 74, 22);
+  ctx.fillStyle = TC;
+  ctx.fillRect(172, 80,  56, 22);
+  ctx.fillRect(180, 62,  40, 20);
+  ctx.fillStyle = TCL;
+  ctx.fillRect(163, 100, 74, 4);
+  ctx.fillRect(172,  80, 56, 4);
+
+  // -- MÁSTIL --
+  ctx.fillStyle = '#CCCCCC';
+  ctx.fillRect(198, 10, 4, 115);
+  // Esfera dorada
+  ctx.fillStyle = '#DDCC22';
+  ctx.fillRect(195,  6, 10, 10);
+  ctx.fillRect(197,  3,  6,  5);
+  ctx.fillStyle = '#FFEE55';
+  ctx.fillRect(196,  7,  4,  4);
+
+  // -- ÁRBOLES --
+  const treeXs = [28,62,90,152,248,310,338,372];
+  for (const tx of treeXs) {
+    const tw = 20 + (tx*7%14);
+    const th = 26 + (tx*3%14);
+    ctx.fillStyle = '#1E5A0E';
+    ctx.fillRect(tx-tw/2,     470,    tw,    th);
+    ctx.fillRect(tx-tw/2+3,   462,    tw-6,  12);
+    ctx.fillStyle = '#2E7A18';
+    ctx.fillRect(tx-tw/2+2,   470,    tw-4,  8);
+    ctx.fillRect(tx-tw/2+4,   462,    tw-8,  10);
+  }
+
+  // -- FAROL (izquierda) --
+  ctx.fillStyle = '#181818';
+  ctx.fillRect(56, 385, 5, 108);   // poste
+  ctx.fillRect(42, 375, 32, 12);   // base farol
+  ctx.fillRect(46, 362, 24, 15);   // cuerpo farol
+  ctx.fillRect(50, 358, 16,  5);   // tapa
+  ctx.fillStyle = '#FFEE99';
+  ctx.fillRect(49, 364, 14,  9);   // luz
+  ctx.fillStyle = '#181818';
+  ctx.fillRect(38, 382, 22,  4);   // brazo decorativo
+  ctx.fillRect(36, 378,  6,  8);
+}
+
 // ---- START screen ----
 function renderStart() {
-  // Fondo: imagen del Palacio de López (o cielo de fallback)
-  if (bgPalacio.complete && bgPalacio.naturalWidth > 0) {
-    ctx.drawImage(bgPalacio, 0, 0, CANVAS_W, CANVAS_H);
-  } else {
-    const [top, bot] = SKY_DAY;
-    const bands = 12;
-    for (let i = 0; i < bands; i++) {
-      const t = i/(bands-1);
-      ctx.fillStyle = lerpColor(top, bot, t);
-      ctx.fillRect(0, Math.floor(i*CANVAS_H/bands), CANVAS_W, Math.ceil(CANVAS_H/bands)+1);
-    }
-    ctx.fillStyle = '#3CB84A';
-    ctx.fillRect(60, 420, 80, 12);
-    ctx.fillRect(200,340, 70, 12);
-  }
+  // Fondo: Palacio de López generado en canvas
+  drawPalacio();
 
   // Overlay suave: solo oscurece la parte superior e inferior para legibilidad del texto
   const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
@@ -1020,6 +1262,21 @@ function drawStaticPlayer(x, y) {
   ctx.fillRect(x+10,y+17, 5, 3);
 }
 
+// ---- ENTER NAME screen (fondo mientras el overlay HTML está visible) ----
+function renderEnterName() {
+  renderBackground();
+  ctx.fillStyle = 'rgba(0,0,0,0.70)';
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#FFFF55';
+  ctx.fillText('¡Che score!', CANVAS_W/2, 180);
+  ctx.font = 'bold 42px monospace';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(score, CANVAS_W/2, 230);
+}
+
 // ---- GAME OVER screen ----
 function renderGameOver() {
   // Background: sky at current altitude
@@ -1032,63 +1289,100 @@ function renderGameOver() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // "¡OMANÓ!" (murió en guaraní) + GAME OVER
-  ctx.font = 'bold 22px monospace';
-  ctx.fillStyle = '#AA0000';
-  ctx.fillText('¡OMANÓ!', CANVAS_W/2+2, 178);
+  // Header
+  ctx.font = 'bold 20px monospace';
   ctx.fillStyle = '#FF6666';
-  ctx.fillText('¡OMANÓ!', CANVAS_W/2, 176);
+  ctx.fillText('¡OMANÓ!  GAME OVER', CANVAS_W/2, 44);
 
-  ctx.font = 'bold 32px monospace';
-  ctx.fillStyle = '#222';
-  ctx.fillText('GAME OVER', CANVAS_W/2+2, 214);
-  ctx.fillStyle = '#FF4444';
-  ctx.fillText('GAME OVER', CANVAS_W/2, 212);
-
-  // Score box con colores de bandera PY
-  ctx.fillStyle = 'rgba(213,43,30,0.15)';
-  ctx.fillRect(80, 238, 240, 92);
+  // Score del jugador
+  ctx.fillStyle = 'rgba(213,43,30,0.20)';
+  ctx.fillRect(30, 56, 340, 52);
   ctx.fillStyle = '#D52B1E';
-  ctx.fillRect(80, 238, 240, 2);
+  ctx.fillRect(30, 56, 340, 2);
   ctx.fillStyle = '#0038A8';
-  ctx.fillRect(80, 328, 240, 2);
+  ctx.fillRect(30, 106, 340, 2);
 
-  ctx.font = '14px monospace';
+  ctx.font = '12px monospace';
   ctx.fillStyle = '#AAAAAA';
-  ctx.fillText('Puntuación', CANVAS_W/2, 260);
-  ctx.font = 'bold 30px monospace';
+  ctx.fillText('Tu puntaje', CANVAS_W/2, 72);
+  ctx.font = 'bold 28px monospace';
   ctx.fillStyle = '#FFFF55';
-  ctx.fillText(score, CANVAS_W/2, 292);
+  ctx.fillText(score, CANVAS_W/2, 96);
 
-  ctx.font = '13px monospace';
-  ctx.fillStyle = '#AAAAAA';
-  ctx.fillText(`Récord: ${highScore}`, CANVAS_W/2, 318);
-
-  const isNew = score === highScore && score > 0;
+  const isNew = score > 0 && leaderboard.length > 0 && leaderboard[0].score === score;
   if (isNew) {
-    ctx.font = 'bold 13px monospace';
+    ctx.font = 'bold 11px monospace';
     ctx.fillStyle = '#44FF88';
-    ctx.fillText('¡REKÓRD PYAHU! 🏆', CANVAS_W/2, 344);
+    ctx.fillText('¡REKÓRD PYAHU! ★', CANVAS_W/2, 116);
   }
 
-  // Frase en guaraní según puntaje
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#AADDFF';
-  const phrase = score < 500  ? '"Che mba\'e porã" — ¡Bien hecho!'
-               : score < 1500 ? '"Porã vaerã" — ¡Muy bien!'
-               : score < 3000 ? '"Tereré ndaipóri" — ¡Al tereré!'
-                               : '"Che pytyvõ" — ¡Sos un crack!';
-  ctx.fillText(phrase, CANVAS_W/2, 364);
+  // ---- TOP 10 ----
+  ctx.fillStyle = 'rgba(0,56,168,0.35)';
+  ctx.fillRect(20, 122, 360, 22);
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#FFDD44';
+  ctx.textAlign = 'left';
+  ctx.fillText('#', 30, 134);
+  ctx.fillText('NOMBRE', 58, 134);
+  ctx.textAlign = 'right';
+  ctx.fillText('PUNTOS', 375, 134);
+  ctx.textAlign = 'center';
 
-  const alt = Math.floor(-maxWorldY / 10);
-  ctx.fillStyle = '#777777';
-  ctx.fillText(`Altura máxima: ${alt * 10}m`, CANVAS_W/2, 382);
+  // Línea separadora
+  ctx.fillStyle = '#0038A8';
+  ctx.fillRect(20, 144, 360, 1);
 
-  // Blink prompt
+  const rowH = 26;
+  for (let i = 0; i < Math.min(leaderboard.length, 10); i++) {
+    const entry = leaderboard[i];
+    const ry = 144 + i * rowH;
+
+    // Highlight fila actual
+    const isMe = entry.score === score && i === leaderboard.findIndex(e => e.score === score);
+    if (isMe) {
+      ctx.fillStyle = 'rgba(255,255,85,0.15)';
+      ctx.fillRect(20, ry, 360, rowH);
+    } else if (i % 2 === 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      ctx.fillRect(20, ry, 360, rowH);
+    }
+
+    // Medal top 3
+    const medals = ['★', '✦', '◆'];
+    const numStr = i < 3 ? medals[i] : `${i+1}.`;
+    const numColor = i === 0 ? '#FFD700' : i === 1 ? '#CCCCCC' : i === 2 ? '#CD7F32' : '#888888';
+
+    ctx.font = i < 3 ? 'bold 12px monospace' : '11px monospace';
+    ctx.fillStyle = numColor;
+    ctx.textAlign = 'left';
+    ctx.fillText(numStr, 28, ry + 17);
+
+    ctx.fillStyle = isMe ? '#FFFF55' : '#DDDDDD';
+    ctx.font = '11px monospace';
+    ctx.fillText(entry.name.substring(0, 12), 58, ry + 17);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = isMe ? '#FFFF55' : '#AADDFF';
+    ctx.fillText(entry.score, 375, ry + 17);
+    ctx.textAlign = 'center';
+
+    // Separador fino
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(20, ry + rowH - 1, 360, 1);
+  }
+
+  if (leaderboard.length === 0) {
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#666666';
+    ctx.fillText('Aún no hay puntajes guardados', CANVAS_W/2, 180);
+  }
+
+  // Prompt
+  const promptY = 144 + Math.min(leaderboard.length, 10) * rowH + 18;
   if (Math.floor(Date.now()/500) % 2 === 0) {
-    ctx.font = 'bold 13px monospace';
+    ctx.font = 'bold 12px monospace';
     ctx.fillStyle = '#FFFF55';
-    ctx.fillText('ESPACIO o TOQUE para reiniciar', CANVAS_W/2, 420);
+    ctx.fillText('ESPACIO o TOQUE para reiniciar', CANVAS_W/2, promptY);
   }
 }
 
@@ -1107,6 +1401,12 @@ function loop(timestamp) {
 }
 
 requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
+
+// Botón y Enter para confirmar nombre
+document.getElementById('nameConfirm').addEventListener('click', confirmName);
+document.getElementById('nameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmName();
+});
 </script>
 </body>
 </html>
