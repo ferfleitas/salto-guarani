@@ -22,44 +22,37 @@
     outline: 4px solid #FFFFFF;
   }
   #nameOverlay {
-    display: none;
+    display: block;
     position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
+    top: 108px; left: 50%;
+    transform: translateX(-50%);
     text-align: center;
     z-index: 10;
-    background: rgba(0,0,0,0.80);
-    border: 2px solid #FFFF55;
-    padding: 24px 28px;
-    width: 260px;
-  }
-  #nameOverlay p {
-    color: #FFFF55;
-    font-size: 15px;
-    margin-bottom: 12px;
-    font-family: monospace;
+    width: 240px;
   }
   #nameInput {
-    font-size: 18px;
+    font-size: 17px;
     font-family: monospace;
     padding: 7px 10px;
     border: 2px solid #FFFF55;
-    background: #111;
+    background: rgba(0,0,0,0.85);
     color: #FFF;
     text-align: center;
     width: 100%;
     box-sizing: border-box;
+    outline: none;
   }
   #nameConfirm {
-    margin-top: 12px;
+    margin-top: 8px;
     font-size: 14px;
     font-family: monospace;
-    padding: 7px 22px;
+    padding: 8px 0;
     background: #D52B1E;
     color: #FFF;
     border: 2px solid #FF8866;
     cursor: pointer;
     width: 100%;
+    letter-spacing: 1px;
   }
   #nameConfirm:hover { background: #FF3333; }
   #gameWrap { position: relative; display: inline-block; }
@@ -69,9 +62,8 @@
 <div id="gameWrap">
   <canvas id="gameCanvas" width="400" height="600"></canvas>
   <div id="nameOverlay">
-    <p>¡Ingresá tu nombre!</p>
     <input id="nameInput" type="text" maxlength="12" placeholder="Tu nombre..." autocomplete="off">
-    <button id="nameConfirm">¡GUARDAR PUNTAJE!</button>
+    <button id="nameConfirm">▶ JUGAR</button>
   </div>
 </div>
 <script>
@@ -118,10 +110,9 @@ const ALT_NIGHT  =  7000;
 const ALT_SPACE  = 15000;
 const ALT_STARS  =  5500;
 
-const STATE_START      = 'start';
-const STATE_PLAYING    = 'playing';
-const STATE_ENTER_NAME = 'entername';
-const STATE_GAMEOVER   = 'gameover';
+const STATE_START    = 'start';
+const STATE_PLAYING  = 'playing';
+const STATE_GAMEOVER = 'gameover';
 
 // Sky color bands [topRGB, botRGB]
 const SKY_DAY    = [[135,206,235],[180,225,255]];
@@ -143,6 +134,7 @@ let gameState = STATE_START;
 let score = 0;
 let highScore = 0;
 let maxWorldY = 450;
+let currentPlayerName = '';
 
 // ============================================================
 // ENTITIES
@@ -198,8 +190,11 @@ canvas.addEventListener('pointercancel', () => {
 });
 
 function handleAction() {
-  if (gameState === STATE_START || gameState === STATE_GAMEOVER) startGame();
-  // STATE_ENTER_NAME se maneja por el botón HTML
+  if (gameState === STATE_GAMEOVER) {
+    gameState = STATE_START;
+    document.getElementById('nameOverlay').style.display = 'block';
+    setTimeout(() => document.getElementById('nameInput').focus(), 50);
+  }
 }
 
 // ============================================================
@@ -331,24 +326,20 @@ function initGame() {
 
 function startGame() {
   initGame();
+  document.getElementById('nameOverlay').style.display = 'none';
   gameState = STATE_PLAYING;
 }
 
 function endGame() {
   if (score > highScore) highScore = score;
-  gameState = STATE_ENTER_NAME;
-  const overlay = document.getElementById('nameOverlay');
-  const input   = document.getElementById('nameInput');
-  overlay.style.display = 'block';
-  input.value = '';
-  setTimeout(() => input.focus(), 50);
+  saveScore(currentPlayerName, score);
+  gameState = STATE_GAMEOVER;
 }
 
-function confirmName() {
-  const name = document.getElementById('nameInput').value;
-  saveScore(name, score);
-  document.getElementById('nameOverlay').style.display = 'none';
-  gameState = STATE_GAMEOVER;
+function confirmAndStart() {
+  const val = document.getElementById('nameInput').value.trim();
+  currentPlayerName = val || 'Anónimo';
+  startGame();
 }
 
 // ============================================================
@@ -585,10 +576,9 @@ function getSkyColors(alt) {
 // ============================================================
 function render() {
   ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
-  if (gameState === STATE_START)      renderStart();
-  if (gameState === STATE_PLAYING)    renderGame();
-  if (gameState === STATE_ENTER_NAME) renderEnterName();
-  if (gameState === STATE_GAMEOVER)   renderGameOver();
+  if (gameState === STATE_START)    renderStart();
+  if (gameState === STATE_PLAYING)  renderGame();
+  if (gameState === STATE_GAMEOVER) renderGameOver();
 }
 
 function renderGame() {
@@ -1133,105 +1123,87 @@ function drawPalacio() {
 
 // ---- START screen ----
 function renderStart() {
-  // Fondo: Palacio de López generado en canvas
   drawPalacio();
 
-  // Overlay suave: solo oscurece la parte superior e inferior para legibilidad del texto
+  // Overlay: oscuro arriba y abajo, transparente en el medio
   const grad = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
-  grad.addColorStop(0,   'rgba(0,0,0,0.60)');
-  grad.addColorStop(0.35,'rgba(0,0,0,0.20)');
-  grad.addColorStop(0.65,'rgba(0,0,0,0.20)');
-  grad.addColorStop(1,   'rgba(0,0,0,0.70)');
+  grad.addColorStop(0,    'rgba(0,0,0,0.78)');
+  grad.addColorStop(0.32, 'rgba(0,0,0,0.55)');
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.30)');
+  grad.addColorStop(1,    'rgba(0,0,0,0.75)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-
-  // Bandera paraguaya mini (franja roja-blanca-azul)
-  ctx.fillStyle = '#D52B1E';
-  ctx.fillRect(CANVAS_W/2-36, 60, 72, 14);
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillRect(CANVAS_W/2-36, 74, 72, 14);
-  ctx.fillStyle = '#0038A8';
-  ctx.fillRect(CANVAS_W/2-36, 88, 72, 14);
-  // Estrella en la franja blanca
-  ctx.fillStyle = '#D52B1E';
-  ctx.fillRect(CANVAS_W/2-1, 77, 3, 8);
-  ctx.fillRect(CANVAS_W/2-4, 80, 9, 2);
-
-  // Title box
-  ctx.fillStyle = 'rgba(213,43,30,0.25)';
-  ctx.fillRect(40, 112, 320, 72);
-  ctx.fillStyle = '#D52B1E';
-  ctx.fillRect(40, 112, 320, 2);
-  ctx.fillStyle = '#0038A8';
-  ctx.fillRect(40, 182, 320, 2);
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
   // Título
-  ctx.font = 'bold 36px monospace';
-  ctx.fillStyle = '#111';
-  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2+2, 150);
+  ctx.font = 'bold 32px monospace';
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2+2, 36);
   ctx.fillStyle = '#FFFFFF';
-  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2, 148);
+  ctx.fillText('SALTO GUARANÍ', CANVAS_W/2, 34);
 
-  // Tagline en guaraní
-  ctx.font = '12px monospace';
-  ctx.fillStyle = '#FFDD88';
-  ctx.fillText('¡Jaike yvate! — ¡Subí hasta las nubes!', CANVAS_W/2, 198);
-
-  // Panel instrucciones
-  ctx.fillStyle = 'rgba(0,56,168,0.3)';
-  ctx.fillRect(40, 214, 320, 156);
-  ctx.fillStyle = '#0038A8';
-  ctx.fillRect(40, 214, 320, 1);
-
-  ctx.font = 'bold 12px monospace';
-  ctx.fillStyle = '#FFDD44';
-  ctx.fillText('CONTROLES', CANVAS_W/2, 232);
-
+  // Tagline
   ctx.font = '11px monospace';
-  ctx.fillStyle = '#CCCCCC';
-  ctx.fillText('← →  Mover | Salta solo al pisar', CANVAS_W/2, 252);
+  ctx.fillStyle = '#FFDD88';
+  ctx.fillText('¡Jaike yvate! — ¡Subí hasta las nubes!', CANVAS_W/2, 58);
 
-  // Leyenda plataformas
-  const types = [
-    { color:'#3CB84A', label:'Normal' },
-    { color:'#3A9BFF', label:'Móvil'  },
-    { color:'#9B6B45', label:'Frágil' },
-    { color:'#FFD020', label:'Chipá'  },
-  ];
-  const lx = [48, 132, 216, 300];
-  for (let i = 0; i < types.length; i++) {
-    ctx.fillStyle = types[i].color;
-    ctx.fillRect(lx[i], 270, 30, 8);
-    ctx.font = '10px monospace';
-    ctx.fillStyle = '#CCCCCC';
-    ctx.textAlign = 'left';
-    ctx.fillText(types[i].label, lx[i], 284);
-  }
+  // Hint para el input (que está en HTML justo debajo de y=108)
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = '#FFFF99';
+  ctx.fillText('▼  Ingresá tu nombre y presioná JUGAR  ▼', CANVAS_W/2, 96);
+
+  // ---- TOP 10 (ocupa el resto de la pantalla) ----
+  const lbY = 192;
+  ctx.fillStyle = 'rgba(0,0,40,0.72)';
+  ctx.fillRect(20, lbY, 360, 26);
+  ctx.fillStyle = '#FFDD44';
+  ctx.font = 'bold 12px monospace';
+  ctx.fillText('— TOP 10 —', CANVAS_W/2, lbY + 13);
+
+  // Cabecera tabla
+  const hY = lbY + 26;
+  ctx.fillStyle = 'rgba(0,56,168,0.50)';
+  ctx.fillRect(20, hY, 360, 20);
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#AAAAFF';
+  ctx.textAlign = 'left';
+  ctx.fillText('#', 30, hY + 10);
+  ctx.fillText('NOMBRE', 56, hY + 10);
+  ctx.textAlign = 'right';
+  ctx.fillText('PUNTOS', 376, hY + 10);
   ctx.textAlign = 'center';
 
-  ctx.font = '11px monospace';
-  ctx.fillStyle = '#FFAAAA';
-  ctx.fillText('¡Esquivá mberu (mosquitos) desde 1000!', CANVAS_W/2, 308);
-  ctx.fillStyle = '#AAFFCC';
-  ctx.fillText('Juntá tereré  y ñandutí', CANVAS_W/2, 326);
+  if (leaderboard.length === 0) {
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#777777';
+    ctx.fillText('¡Sé el primero en el ranking!', CANVAS_W/2, hY + 36);
+  } else {
+    const rowH = 24;
+    for (let i = 0; i < Math.min(leaderboard.length, 10); i++) {
+      const e  = leaderboard[i];
+      const ry = hY + 20 + i * rowH;
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.10)';
+      ctx.fillRect(20, ry, 360, rowH);
 
-  ctx.font = '10px monospace';
-  ctx.fillStyle = '#AAAAAA';
-  ctx.fillText('Tereré = propulsión  |  Ñandutí = escudo', CANVAS_W/2, 346);
-  ctx.fillText('Chipá = super salto', CANVAS_W/2, 360);
+      const medals  = ['★','✦','◆'];
+      const mColors = ['#FFD700','#CCCCCC','#CD7F32'];
+      ctx.font = i < 3 ? 'bold 11px monospace' : '10px monospace';
+      ctx.fillStyle = i < 3 ? mColors[i] : '#888888';
+      ctx.textAlign = 'left';
+      ctx.fillText(i < 3 ? medals[i] : `${i+1}.`, 28, ry + 15);
 
-  // Blink prompt
-  if (Math.floor(Date.now()/500) % 2 === 0) {
-    ctx.font = 'bold 14px monospace';
-    ctx.fillStyle = '#FFFF55';
-    ctx.fillText('ESPACIO o TOQUE para empezar', CANVAS_W/2, 406);
+      ctx.fillStyle = '#DDDDDD';
+      ctx.font = '11px monospace';
+      ctx.fillText(e.name.substring(0, 12), 56, ry + 15);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#AADDFF';
+      ctx.fillText(e.score, 376, ry + 15);
+      ctx.textAlign = 'center';
+    }
   }
-
-  // Mini jugador con camiseta albirroja
-  drawStaticPlayer(192, 438);
 }
 
 function drawStaticPlayer(x, y) {
@@ -1260,21 +1232,6 @@ function drawStaticPlayer(x, y) {
   ctx.fillStyle = '#EEEEEE';
   ctx.fillRect(x+1, y+17, 5, 3);
   ctx.fillRect(x+10,y+17, 5, 3);
-}
-
-// ---- ENTER NAME screen (fondo mientras el overlay HTML está visible) ----
-function renderEnterName() {
-  renderBackground();
-  ctx.fillStyle = 'rgba(0,0,0,0.70)';
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.font = 'bold 22px monospace';
-  ctx.fillStyle = '#FFFF55';
-  ctx.fillText('¡Che score!', CANVAS_W/2, 180);
-  ctx.font = 'bold 42px monospace';
-  ctx.fillStyle = '#FFFFFF';
-  ctx.fillText(score, CANVAS_W/2, 230);
 }
 
 // ---- GAME OVER screen ----
@@ -1377,12 +1334,12 @@ function renderGameOver() {
     ctx.fillText('Aún no hay puntajes guardados', CANVAS_W/2, 180);
   }
 
-  // Prompt
+  // Prompt volver al inicio
   const promptY = 144 + Math.min(leaderboard.length, 10) * rowH + 18;
   if (Math.floor(Date.now()/500) % 2 === 0) {
     ctx.font = 'bold 12px monospace';
     ctx.fillStyle = '#FFFF55';
-    ctx.fillText('ESPACIO o TOQUE para reiniciar', CANVAS_W/2, promptY);
+    ctx.fillText('ESPACIO o TOQUE para volver al inicio', CANVAS_W/2, promptY);
   }
 }
 
@@ -1402,11 +1359,14 @@ function loop(timestamp) {
 
 requestAnimationFrame(ts => { lastTime = ts; requestAnimationFrame(loop); });
 
-// Botón y Enter para confirmar nombre
-document.getElementById('nameConfirm').addEventListener('click', confirmName);
+// Botón y Enter para confirmar nombre y empezar
+document.getElementById('nameConfirm').addEventListener('click', confirmAndStart);
 document.getElementById('nameInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') confirmName();
+  if (e.key === 'Enter') confirmAndStart();
 });
+
+// Foco automático al cargar
+setTimeout(() => document.getElementById('nameInput').focus(), 100);
 </script>
 </body>
 </html>
